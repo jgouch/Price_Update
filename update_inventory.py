@@ -14,6 +14,7 @@ COL_GARDEN = 'Garden'      # The high-level garden name
 COL_ROW = 'Section'        # Often 'Section', 'Row', or 'Lot' in reports
 COL_STATUS = 'Status'      # 'Available', 'Sold', 'Occupied', etc.
 STATUS_AVAILABLE = ['Available', 'Serviceable'] # What counts as "For Sale"?
+STATUS_AVAILABLE_NORMALIZED = {status.strip().upper() for status in STATUS_AVAILABLE}
 
 # --- 1. SETUP ---
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -34,10 +35,21 @@ def clean_row_name(row_str):
         return s.replace('ELEVATION', '').strip()
     return s
 
+def _normalize_status_series(series):
+    return series.astype(str).str.strip().str.upper()
+
+
 def calculate_percent_sold(df_inventory, garden_name):
     """Calculates % Sold for a specific garden."""
+    if not garden_name or pd.isna(garden_name) or str(garden_name).strip() == '':
+        return None
     # Filter inventory for this garden
-    garden_mask = df_inventory[COL_GARDEN].astype(str).str.contains(garden_name, case=False, na=False)
+    garden_mask = df_inventory[COL_GARDEN].astype(str).str.contains(
+        str(garden_name),
+        case=False,
+        na=False,
+        regex=False,
+    )
     garden_data = df_inventory[garden_mask]
     
     total_spaces = len(garden_data)
@@ -45,7 +57,7 @@ def calculate_percent_sold(df_inventory, garden_name):
         return None
         
     # Count available
-    avail_mask = garden_data[COL_STATUS].isin(STATUS_AVAILABLE)
+    avail_mask = _normalize_status_series(garden_data[COL_STATUS]).isin(STATUS_AVAILABLE_NORMALIZED)
     avail_spaces = len(garden_data[avail_mask])
     
     percent_sold = (total_spaces - avail_spaces) / total_spaces
@@ -53,8 +65,15 @@ def calculate_percent_sold(df_inventory, garden_name):
 
 def count_row_availability(df_inventory, garden_name, row_name):
     """Counts available spaces in a specific row/section of a garden."""
+    if not garden_name or pd.isna(garden_name) or str(garden_name).strip() == '':
+        return "N/A"
     # 1. Filter by Garden
-    garden_mask = df_inventory[COL_GARDEN].astype(str).str.contains(garden_name, case=False, na=False)
+    garden_mask = df_inventory[COL_GARDEN].astype(str).str.contains(
+        str(garden_name),
+        case=False,
+        na=False,
+        regex=False,
+    )
     garden_data = df_inventory[garden_mask]
     
     if garden_data.empty:
@@ -69,7 +88,9 @@ def count_row_availability(df_inventory, garden_name, row_name):
     row_data = garden_data[row_mask]
     
     # 3. Count Status
-    avail_count = len(row_data[row_data[COL_STATUS].isin(STATUS_AVAILABLE)])
+    avail_count = len(
+        row_data[_normalize_status_series(row_data[COL_STATUS]).isin(STATUS_AVAILABLE_NORMALIZED)]
+    )
     
     # If the row doesn't exist in inventory, return empty so we don't overwrite manual data
     if len(row_data) == 0:
@@ -110,7 +131,13 @@ with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
         if any('%' in c for c in cols) and 'GARDEN' in cols:
             # Find the specific column names
             garden_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
-            sold_col = next(c for c in df.columns if '%' in str(c))
+            sold_col_candidates = [
+                c for c in df.columns if '%' in str(c) and 'SOLD' in str(c).upper()
+            ]
+            if sold_col_candidates:
+                sold_col = sold_col_candidates[0]
+            else:
+                sold_col = next(c for c in df.columns if '%' in str(c))
             
             for idx, row in df.iterrows():
                 garden_name = str(row[garden_col])
@@ -125,8 +152,14 @@ with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
 
         # --- SCENARIO B: MAUSOLEUMS / NICHES (EXACT COUNTS) ---
         # Look for a "Row", "Level", or "Section" column AND an "Available" or "Qty" column
-        row_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION'])]
-        qty_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
+        row_col_candidates = [
+            c for c in df.columns
+            if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION'])
+        ]
+        qty_col_candidates = [
+            c for c in df.columns
+            if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'QUANTITY', 'AVAILABLE'])
+        ]
         
         if row_col_candidates and qty_col_candidates:
             row_col = row_col_candidates[0]
