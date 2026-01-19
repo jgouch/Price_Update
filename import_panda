@@ -1,0 +1,17 @@
+import pandas as pd
+import sys
+
+if len(sys.argv) < 2:
+    print("Usage: python3 check_columns.py [Inventory_File]")
+    exit()
+
+file_path = sys.argv[1].strip().replace("'", "").replace('"', "")
+print(f"Reading: {file_path}...")
+
+try:
+    df = pd.read_excel(file_path)
+    print("\nSUCCESS! Here are your exact column names:\n")
+    print(list(df.columns))
+    print("\n Please copy and paste the list above back to me!")
+except Exception as e:
+    print(f"Error: {e}")
