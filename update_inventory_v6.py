@@ -10,8 +10,10 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # --- HELPER FUNCTIONS ---
 def clean_row_name(row_str):
     s = str(row_str).strip().upper()
-    if ' - ' in s or ' – ' in s:
-        return re.split(r'[-–]', s)[0].strip()
+    if ' - ' in s:
+        return s.split(' - ', 1)[0].strip()
+    if ' – ' in s:
+        return s.split(' – ', 1)[0].strip()
     if 'ELEVATION' in s:
         return s.replace('ELEVATION', '').strip()
     return s
@@ -42,20 +44,30 @@ def identify_columns(df):
             
     return mapping
 
+def normalize_status_series(series):
+    return series.astype(str).str.strip().str.upper()
+
 def calculate_percent_sold(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
     col_status = col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    status_avail = {'AVAILABLE', 'SERVICEABLE', 'FOR SALE', 'VACANT'}
     
     # Filter Garden
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    if pd.isna(garden_name) or str(garden_name).strip() == '':
+        return None
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(
+        str(garden_name),
+        case=False,
+        na=False,
+        regex=False,
+    )
     garden_data = df_inventory[garden_mask]
     
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
-    avail_count = len(garden_data[avail_mask])
+    avail_mask = normalize_status_series(garden_data[col_status]).isin(status_avail)
+    avail_count = avail_mask.sum()
     
     return (total - avail_count) / total
 
@@ -63,9 +75,16 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden = col_map['Garden']
     col_row = col_map['Row']
     col_status = col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    status_avail = {'AVAILABLE', 'SERVICEABLE', 'FOR SALE', 'VACANT'}
 
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    if pd.isna(garden_name) or str(garden_name).strip() == '':
+        return "N/A"
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(
+        str(garden_name),
+        case=False,
+        na=False,
+        regex=False,
+    )
     garden_data = df_inventory[garden_mask]
     
     if garden_data.empty: return "N/A"
@@ -76,8 +95,16 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
-    return len(row_data[avail_mask])
+    avail_mask = normalize_status_series(row_data[col_status]).isin(status_avail)
+    return avail_mask.sum()
+
+def select_preferred_column(df, keywords, preferred_keywords=()):
+    candidates = [c for c in df.columns if any(x in str(c).upper() for x in keywords)]
+    for keyword in preferred_keywords:
+        for c in candidates:
+            if keyword in str(c).upper():
+                return c
+    return candidates[0] if candidates else None
 
 # --- MAIN LOGIC ---
 
@@ -128,7 +155,15 @@ def main():
             # 1. UPDATE % SOLD
             if any('%' in c for c in cols) and 'GARDEN' in cols:
                 garden_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
-                sold_col = next(c for c in df.columns if '%' in str(c))
+                sold_col = select_preferred_column(
+                    df,
+                    ['%'],
+                    preferred_keywords=('SOLD', 'PERCENT SOLD'),
+                )
+                if not sold_col:
+                    print(f"⚠️  Skipping % sold update for '{sheet_name}' (no % column found).")
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    continue
                 
                 for idx, row in df.iterrows():
                     garden_name = str(row[garden_col])
@@ -137,13 +172,18 @@ def main():
                         df.at[idx, sold_col] = new_pct
 
             # 2. UPDATE EXACT COUNTS
-            row_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION'])]
-            qty_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
+            row_col = select_preferred_column(
+                df,
+                ['ROW', 'LEVEL', 'SECTION', 'STATION'],
+                preferred_keywords=('ROW', 'SECTION'),
+            )
+            qty_col = select_preferred_column(
+                df,
+                ['AVAIL', 'QTY', 'AVAILABLE', 'QUANTITY'],
+                preferred_keywords=('AVAIL', 'AVAILABLE', 'QTY', 'QUANTITY'),
+            )
             
-            if row_col_candidates and qty_col_candidates:
-                row_col = row_col_candidates[0]
-                qty_col = qty_col_candidates[0]
-                
+            if row_col and qty_col:
                 clean_sheet = sheet_name
                 if '_' in clean_sheet: clean_sheet = clean_sheet.split('_', 1)[1]
                 clean_sheet = clean_sheet.replace('Mausoleum', '').replace('Niches', '').replace('Columbarium', '').strip()
@@ -159,6 +199,8 @@ def main():
                             df.at[idx, qty_col] = "Sold Out"
                         else:
                             df.at[idx, qty_col] = count
+            elif any(x in cols for x in ['ROW', 'LEVEL', 'SECTION', 'STATION']):
+                print(f"⚠️  Skipping availability counts for '{sheet_name}' (missing row or quantity column).")
 
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
