@@ -10,8 +10,10 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # --- HELPER FUNCTIONS ---
 def clean_row_name(row_str):
     s = str(row_str).strip().upper()
-    if ' - ' in s or ' – ' in s:
-        return re.split(r'[-–]', s)[0].strip()
+    if ' – ' in s:
+        return s.split(' – ', 1)[0].strip()
+    if ' - ' in s:
+        return s.split(' - ', 1)[0].strip()
     if 'ELEVATION' in s:
         return s.replace('ELEVATION', '').strip()
     return s
@@ -48,14 +50,17 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_section = col_map['Row'] # We use the row/section column for the sub-part
     col_status = col_map['Status']
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+
+    if pd.isna(garden_name_full) or str(garden_name_full).strip() == '':
+        return None
     
     # 1. Check for Split Name (e.g., "Grace - Sidewalk")
     if '–' in garden_name_full:
-        parts = garden_name_full.split('–')
+        parts = garden_name_full.split('–', 1)
         main_garden = parts[0].strip()
         sub_section = parts[1].strip()
     elif '-' in garden_name_full:
-        parts = garden_name_full.split('-')
+        parts = garden_name_full.split('-', 1)
         main_garden = parts[0].strip()
         sub_section = parts[1].strip()
     else:
@@ -63,13 +68,13 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
         sub_section = None
 
     # 2. Filter Main Garden
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(re.escape(main_garden), case=False, na=False, regex=True)
     garden_data = df_inventory[garden_mask]
     
     # 3. If Sub-Section exists, Filter by Section Column
     if sub_section and not garden_data.empty:
         # Try to find the subsection text (e.g. "Sidewalk") in the Section/Row column
-        section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
+        section_mask = garden_data[col_section].astype(str).str.contains(re.escape(sub_section), case=False, na=False, regex=True)
         # If that filter returns data, use it. If not, revert to main garden (safety net)
         if section_mask.any():
             garden_data = garden_data[section_mask]
@@ -88,7 +93,10 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_status = col_map['Status']
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    if pd.isna(garden_name) or str(garden_name).strip() == '':
+        return "N/A"
+
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(re.escape(garden_name), case=False, na=False, regex=True)
     garden_data = df_inventory[garden_mask]
     
     if garden_data.empty: return "N/A"
@@ -148,12 +156,12 @@ def main():
             cols = [str(c).upper() for c in df.columns]
             
             # 1. UPDATE % SOLD (With Smart Split Logic)
-            if any('%' in c for c in cols) and 'GARDEN' in cols:
-                garden_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
+            garden_col = next((c for c in df.columns if 'GARDEN' in str(c).upper()), None)
+            if any('%' in c for c in cols) and garden_col:
                 sold_col = next(c for c in df.columns if '%' in str(c))
                 
                 for idx, row in df.iterrows():
-                    garden_name = str(row[garden_col])
+                    garden_name = row[garden_col]
                     
                     # Pass the FULL name (e.g. "Grace - Sidewalk") to the calculator
                     new_pct = calculate_percent_sold(df_inv, garden_name, col_map)
@@ -163,11 +171,12 @@ def main():
 
             # 2. UPDATE EXACT COUNTS
             row_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION'])]
-            qty_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
+            qty_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY'])]
+            qty_col_candidates += [c for c in df.columns if 'STATUS' in str(c).upper()]
             
             if row_col_candidates and qty_col_candidates:
                 row_col = row_col_candidates[0]
-                qty_col = qty_col_candidates[0]
+                qty_col = next((c for c in qty_col_candidates if 'STATUS' not in str(c).upper()), qty_col_candidates[0])
                 
                 clean_sheet = sheet_name
                 if '_' in clean_sheet: clean_sheet = clean_sheet.split('_', 1)[1]
