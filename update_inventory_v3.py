@@ -50,8 +50,10 @@ def identify_columns(df):
 def clean_row_name(row_str):
     """Cleans row names like 'E - Heavenly' -> 'E'."""
     s = str(row_str).strip().upper()
-    if ' - ' in s or ' – ' in s:
-        return re.split(r'[-–]', s)[0].strip()
+    if ' - ' in s:
+        return s.split(' - ', 1)[0].strip()
+    if ' – ' in s:
+        return s.split(' – ', 1)[0].strip()
     if 'ELEVATION' in s:
         return s.replace('ELEVATION', '').strip()
     return s
@@ -63,7 +65,14 @@ def calculate_percent_sold(df_inventory, garden_name, col_map):
     status_avail = ['Available', 'Serviceable', 'For Sale'] # Add variations as needed
     
     # Filter for garden
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    garden_query = str(garden_name).strip()
+    if not garden_query or garden_query.lower() == 'nan':
+        return None
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(
+        re.escape(garden_query),
+        case=False,
+        na=False
+    )
     garden_data = df_inventory[garden_mask]
     
     total = len(garden_data)
@@ -83,7 +92,14 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     status_avail = ['Available', 'Serviceable', 'For Sale']
 
     # Filter Garden
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    garden_query = str(garden_name).strip()
+    if not garden_query or garden_query.lower() == 'nan':
+        return "N/A"
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(
+        re.escape(garden_query),
+        case=False,
+        na=False
+    )
     garden_data = df_inventory[garden_mask]
     
     if garden_data.empty: return "N/A"
@@ -154,7 +170,14 @@ def main():
             # 1. UPDATE % SOLD
             if any('%' in c for c in cols) and 'GARDEN' in cols:
                 garden_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
-                sold_col = next(c for c in df.columns if '%' in str(c))
+                sold_col_candidates = [
+                    c for c in df.columns
+                    if '%' in str(c)
+                    and 'SOLD' in str(c).upper()
+                ]
+                sold_col = sold_col_candidates[0] if sold_col_candidates else next(
+                    c for c in df.columns if '%' in str(c)
+                )
                 
                 for idx, row in df.iterrows():
                     garden_name = str(row[garden_col])
@@ -164,7 +187,11 @@ def main():
 
             # 2. UPDATE EXACT COUNTS
             row_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION'])]
-            qty_col_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
+            qty_col_candidates = [
+                c for c in df.columns
+                if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'COUNT'])
+                and 'STATUS' not in str(c).upper()
+            ]
             
             if row_col_candidates and qty_col_candidates:
                 row_col = row_col_candidates[0]
