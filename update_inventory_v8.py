@@ -9,6 +9,8 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 # --- HELPER FUNCTIONS ---
 def clean_row_name(row_str):
+    if pd.isna(row_str):
+        return ''
     s = str(row_str).strip().upper()
     if ' - ' in s or ' – ' in s:
         return re.split(r'[-–]', s)[0].strip()
@@ -43,6 +45,8 @@ def identify_columns(df):
     return mapping
 
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
+    if pd.isna(garden_name_full):
+        return None
     col_garden = col_map['Garden']
     col_section = col_map['Row']
     col_status = col_map['Status']
@@ -62,12 +66,12 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
         sub_section = None
 
     # Filter Main Garden
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
     
     # Filter Sub-Section if needed
     if sub_section and not garden_data.empty:
-        section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
+        section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False, regex=False)
         if section_mask.any():
             garden_data = garden_data[section_mask]
     
@@ -85,7 +89,10 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_status = col_map['Status']
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    if pd.isna(garden_name):
+        return None
+
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
     
     if garden_data.empty: return "N/A"
