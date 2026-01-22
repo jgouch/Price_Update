@@ -5,7 +5,6 @@ import sys
 import warnings
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
 
 # --- 1. SETUP ---
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -59,12 +58,17 @@ def identify_columns(df):
             
     return mapping
 
+def contains_value(series, value):
+    return series.astype(str).str.contains(value, case=False, na=False, regex=False)
+
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
-    mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    mask = contains_value(df_inventory[col_garden], garden_name)
     return mask.any()
 
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
+    if pd.isna(garden_name_full) or str(garden_name_full).strip() == "":
+        return None
     col_garden = col_map['Garden']
     col_section = col_map['Row']
     col_status = col_map['Status']
@@ -77,18 +81,18 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     main_garden = parts[0].strip()
     sub_section = parts[1].strip() if len(parts) > 1 else None
 
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
+    garden_mask = contains_value(df_inventory[col_garden], main_garden)
     garden_data = df_inventory[garden_mask]
     
     if sub_section and not garden_data.empty:
-        section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
+        section_mask = contains_value(garden_data[col_section], sub_section)
         if section_mask.any():
             garden_data = garden_data[section_mask]
     
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False, regex=True)
     avail_count = len(garden_data[avail_mask])
     
     return (total - avail_count) / total
@@ -99,7 +103,7 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_status = col_map['Status']
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    garden_mask = contains_value(df_inventory[col_garden], garden_name)
     garden_data = df_inventory[garden_mask]
     
     if garden_data.empty: return "N/A"
@@ -113,8 +117,16 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False, regex=True)
     return len(row_data[avail_mask])
+
+def pick_best_column(columns, preferred_keywords):
+    upper_cols = [str(c).upper() for c in columns]
+    for keyword in preferred_keywords:
+        for idx, col in enumerate(upper_cols):
+            if keyword in col:
+                return columns[idx]
+    return None
 
 # --- 3. FORMATTING FUNCTION ---
 
@@ -143,7 +155,8 @@ def apply_professional_formatting(file_path):
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
-                except: pass
+                except Exception:
+                    pass
             ws.column_dimensions[column].width = min((max_length + 2) * 1.1, 50)
 
         # Row Styling
@@ -211,6 +224,9 @@ def main():
     try:
         df_inv = pd.read_excel(inv_path, header=2)
         col_map = identify_columns(df_inv)
+        if None in col_map.values():
+            df_inv = pd.read_excel(inv_path, header=0)
+            col_map = identify_columns(df_inv)
         print(f"✅ Inventory Loaded & Mapped")
         if None in col_map.values():
             print("❌ Error: Missing columns in inventory.")
@@ -249,16 +265,17 @@ def main():
                 garden_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
                 sold_col = next(c for c in df.columns if '%' in str(c))
                 for idx, row in df.iterrows():
-                    new_pct = calculate_percent_sold(df_inv, str(row[garden_col]), col_map)
+                    garden_val = row[garden_col]
+                    new_pct = calculate_percent_sold(df_inv, garden_val, col_map)
                     if new_pct is not None: df.at[idx, sold_col] = new_pct
 
             # Update Counts
-            row_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION', 'PRODUCT'])]
+            row_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['SECTION', 'ROW', 'LEVEL', 'STATION', 'PRODUCT'])]
             qty_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
             
             if row_candidates and qty_candidates:
-                row_col = row_candidates[0]
-                qty_col = qty_candidates[0]
+                row_col = pick_best_column(row_candidates, ['SECTION', 'ROW', 'LEVEL', 'STATION', 'PRODUCT']) or row_candidates[0]
+                qty_col = pick_best_column(qty_candidates, ['AVAIL', 'QTY', 'STATUS']) or qty_candidates[0]
                 for idx, row in df.iterrows():
                     row_val = row[row_col]
                     if pd.isna(row_val) or str(row_val).strip() == '': continue
