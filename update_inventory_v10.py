@@ -16,12 +16,12 @@ def clean_sheet_name_specific(sheet_name):
     """
     # Remove numbering prefixes like "01_", "14_"
     name = re.sub(r'^\d+_', '', sheet_name)
-    
-    # Remove ONLY generic building words, but KEEP the distinction
+
+    # Remove ONLY generic building words, but KEEP the distinction (case-insensitive)
     remove_words = ['Mausoleum', 'Bldg', 'Building']
     for word in remove_words:
-        name = name.replace(word, '')
-    
+        name = re.sub(re.escape(word), '', name, flags=re.IGNORECASE)
+
     return name.strip()
 
 def clean_sheet_name_generic(sheet_name):
@@ -32,7 +32,7 @@ def clean_sheet_name_generic(sheet_name):
     name = clean_sheet_name_specific(sheet_name)
     remove_words = ['Columbarium', 'Niches', 'Garden']
     for word in remove_words:
-        name = name.replace(word, '')
+        name = re.sub(re.escape(word), '', name, flags=re.IGNORECASE)
     return name.strip()
 
 def clean_row_name(row_str):
@@ -49,8 +49,8 @@ def clean_row_name(row_str):
     
     # Normalize dashes
     s = s.replace('—', '-').replace('–', '-')
-    if '-' in s:
-        s = s.split('-')[0]
+    if ' - ' in s:
+        s = s.split(' - ')[0]
         
     return s.strip()
 
@@ -85,8 +85,15 @@ def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     """Checks if a garden name exists in the inventory."""
     col_garden = col_map['Garden']
     # Use simple string match
-    mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False, regex=False)
     return mask.any()
+
+def is_available_status(status_value):
+    """Determines if a status value is considered available."""
+    if pd.isna(status_value):
+        return False
+    normalized = str(status_value).strip().upper()
+    return normalized in {'AVAILABLE', 'SERVICEABLE', 'FOR SALE', 'VACANT'}
 
 # --- 4. CALCULATIONS ---
 
@@ -94,10 +101,10 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_garden = col_map['Garden']
     col_section = col_map['Row']
     col_status = col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
     
     # Split Logic
     if '–' in garden_name_full: parts = garden_name_full.split('–')
+    elif ' - ' in garden_name_full: parts = garden_name_full.split(' - ')
     elif '-' in garden_name_full: parts = garden_name_full.split('-')
     else: parts = [garden_name_full]
     
@@ -105,19 +112,19 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     sub_section = parts[1].strip() if len(parts) > 1 else None
 
     # Filter Main Garden
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
     
     # Filter Sub-Section
     if sub_section and not garden_data.empty:
-        section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
+        section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False, regex=False)
         if section_mask.any():
             garden_data = garden_data[section_mask]
     
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = garden_data[col_status].apply(is_available_status)
     avail_count = len(garden_data[avail_mask])
     
     return (total - avail_count) / total
@@ -126,12 +133,11 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden = col_map['Garden']
     col_row = col_map['Row']
     col_status = col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
-    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
+    garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
     
-    if garden_data.empty: return "N/A"
+    if garden_data.empty: return None
 
     target = clean_row_name(row_name)
     
@@ -143,7 +149,7 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = row_data[col_status].apply(is_available_status)
     return len(row_data[avail_mask])
 
 # --- 5. FILE DETECT ---
@@ -152,6 +158,23 @@ def detect_file_types(path1, path2):
     f2 = os.path.basename(path2).lower()
     if 'inventory' in f1 and 'inventory' not in f2: return path1, path2
     if 'inventory' in f2 and 'inventory' not in f1: return path2, path1
+    return None, None
+
+def infer_inventory_path(path1, path2):
+    """Attempt to infer the inventory file by checking expected columns."""
+    candidates = []
+    for path in (path1, path2):
+        try:
+            df = pd.read_excel(path, header=2)
+        except Exception:
+            continue
+        col_map = identify_columns(df)
+        if None not in col_map.values():
+            candidates.append(path)
+    if len(candidates) == 1:
+        inv_path = candidates[0]
+        master_path = path2 if inv_path == path1 else path1
+        return inv_path, master_path
     return None, None
 
 # --- MAIN ---
@@ -165,7 +188,9 @@ def main():
 
     inv_path, master_path = detect_file_types(path_a, path_b)
     if not inv_path:
-        print("❌ Error: Could not verify files. One filename must include 'Inventory'.")
+        inv_path, master_path = infer_inventory_path(path_a, path_b)
+    if not inv_path:
+        print("❌ Error: Could not verify files. One filename must include 'Inventory' or contain expected columns.")
         return
 
     print(f"\n📂 Inventory: {os.path.basename(inv_path)}")
@@ -217,9 +242,13 @@ def main():
             cols = [str(c).upper() for c in df.columns]
             
             # A. GROUND BURIAL
-            if any('%' in c for c in cols) and 'GARDEN' in cols:
+            percent_candidates = [
+                c for c in df.columns
+                if any(x in str(c).upper() for x in ['%', 'PCT', 'PERCENT'])
+            ]
+            if percent_candidates and 'GARDEN' in cols:
                 garden_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
-                sold_col = next(c for c in df.columns if '%' in str(c))
+                sold_col = percent_candidates[0]
                 
                 for idx, row in df.iterrows():
                     garden_name = str(row[garden_col])
@@ -229,7 +258,7 @@ def main():
 
             # B. MAUSOLEUMS / NICHES
             row_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION', 'PRODUCT'])]
-            qty_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
+            qty_candidates = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY'])]
             
             if row_candidates and qty_candidates:
                 row_col = row_candidates[0]
@@ -241,7 +270,7 @@ def main():
                     
                     count = count_row_availability(df_inv, final_search_name, str(row_val), col_map)
                     
-                    if count is not None and count != "N/A":
+                    if count is not None:
                         if count == 0:
                             df.at[idx, qty_col] = "Sold Out"
                         else:
