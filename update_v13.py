@@ -45,6 +45,16 @@ def find_true_header_row(file_path, sheet_name):
             return i
     return 0 # Default to 0 if not found
 
+def find_inventory_header_row(file_path, sheet_name):
+    """Scans the first 20 rows for likely inventory header keywords."""
+    df_temp = pd.read_excel(file_path, sheet_name=sheet_name, header=None, nrows=20)
+    keywords = {'GARDEN', 'ROW', 'SECTION', 'BLOCK', 'LOT', 'STATUS', 'AVAIL', 'AVAILABILITY'}
+    for i, row in df_temp.iterrows():
+        row_str = " ".join([str(v).upper() for v in row.values])
+        if sum(kw in row_str for kw in keywords) >= 2:
+            return i
+    return 0
+
 def identify_columns(df):
     cols = [str(c) for c in df.columns]
     mapping = {'Garden': None, 'Row': None, 'Status': None}
@@ -64,6 +74,23 @@ def identify_columns(df):
             
     return mapping
 
+def validate_inventory_columns(col_map):
+    missing_required = [k for k in ['Garden', 'Status'] if not col_map.get(k)]
+    if missing_required:
+        missing_str = ", ".join(missing_required)
+        print(f"❌ Error: Missing required inventory columns: {missing_str}")
+        return False
+    if not col_map.get('Row'):
+        print("⚠️ Warning: No inventory Row/Section column detected; row-level counts will be skipped.")
+    return True
+
+def find_percent_sold_column(columns):
+    for c in columns:
+        name = str(c).upper()
+        if '%' in name and any(x in name for x in ['SOLD', 'PCT', 'PERCENT']):
+            return c
+    return None
+
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
     mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
@@ -81,7 +108,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
     garden_data = df_inventory[garden_mask]
     
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
@@ -94,6 +121,9 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+
+    if not col_row:
+        return None
 
     garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
     garden_data = df_inventory[garden_mask]
@@ -144,7 +174,7 @@ def apply_professional_formatting(file_path):
             # Determine Format Type
             is_currency = any(x in header_val for x in ['PRICE', 'TOTAL', 'RIGHT', 'COST'])
             is_percent = any(x in header_val for x in ['%', 'SOLD'])
-            is_count = any(x in header_val for x in ['QTY', 'AVAIL', 'STATUS'])
+            is_count = any(x in header_val for x in ['QTY', 'AVAIL', 'COUNT'])
             
             max_len = 0
             
@@ -165,7 +195,7 @@ def apply_professional_formatting(file_path):
                     cell.fill = PatternFill(start_color=ROW_ALT_COLOR, end_color=ROW_ALT_COLOR, fill_type="solid")
 
                 # D. DATA CLEANING (Fix Green Triangles)
-                if cell.value is not None:
+                if cell.value is not None and (is_currency or is_percent or is_count):
                     # Strip string artifacts ($ ,)
                     val_str = str(cell.value).replace('$', '').replace(',', '').strip()
                     
@@ -210,8 +240,13 @@ def main():
 
     # READ INVENTORY
     try:
-        df_inv = pd.read_excel(inv_path, header=2)
+        inv_xl = pd.ExcelFile(inv_path)
+        inv_sheet = inv_xl.sheet_names[0]
+        inv_header_idx = find_inventory_header_row(inv_path, inv_sheet)
+        df_inv = pd.read_excel(inv_path, sheet_name=inv_sheet, header=inv_header_idx)
         col_map = identify_columns(df_inv)
+        if not validate_inventory_columns(col_map):
+            return
     except Exception as e: print(f"❌ Error: {e}"); return
 
     print("⚙️  Processing Updates...")
@@ -239,9 +274,10 @@ def main():
             cols = [str(c).upper() for c in df.columns]
             
             # % Sold
-            if any('%' in c for c in cols) and 'GARDEN' in cols:
+            percent_col = find_percent_sold_column(df.columns)
+            if percent_col and 'GARDEN' in cols:
                 g_col = next(c for c in df.columns if str(c).upper() == 'GARDEN')
-                s_col = next(c for c in df.columns if '%' in str(c))
+                s_col = percent_col
                 for idx, row in df.iterrows():
                     val = calculate_percent_sold(df_inv, str(row[g_col]), col_map)
                     if val is not None: df.at[idx, s_col] = val
@@ -250,7 +286,7 @@ def main():
             r_cands = [c for c in df.columns if any(x in str(c).upper() for x in ['ROW', 'LEVEL', 'SECTION', 'STATION', 'PRODUCT'])]
             q_cands = [c for c in df.columns if any(x in str(c).upper() for x in ['AVAIL', 'QTY', 'STATUS'])]
             
-            if r_cands and q_cands:
+            if r_cands and q_cands and col_map.get('Row'):
                 r_col, q_col = r_cands[0], q_cands[0]
                 for idx, row in df.iterrows():
                     val = count_row_availability(df_inv, final_search_name, str(row[r_col]), col_map)
