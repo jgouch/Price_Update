@@ -53,13 +53,18 @@ def identify_columns(df):
 
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
+    if not col_garden:
+        return False
     mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
     return mask.any()
 
 # --- 4. CALCULATIONS ---
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_garden, col_section, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    status_pattern = '|'.join(re.escape(status) for status in status_avail)
     
     parts = re.split(r'[-–]', garden_name_full)
     main_garden = parts[0].strip()
@@ -68,19 +73,22 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
     garden_data = df_inventory[garden_mask]
     
-    if sub_section and not garden_data.empty:
+    if sub_section and not garden_data.empty and col_section:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = garden_data[col_status].astype(str).str.contains(status_pattern, case=False, na=False)
     return (total - len(garden_data[avail_mask])) / total
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_row or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    status_pattern = '|'.join(re.escape(status) for status in status_avail)
 
     garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
     garden_data = df_inventory[garden_mask]
@@ -95,7 +103,7 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = row_data[col_status].astype(str).str.contains(status_pattern, case=False, na=False)
     return len(row_data[avail_mask])
 
 # --- 5. SURGICAL UPDATE (Preserves Titles) ---
@@ -130,7 +138,7 @@ def surgical_update(inv_path, master_path, output_path):
         
         for r in range(1, 21):
             row_vals = [str(ws.cell(row=r, column=c).value).upper() for c in range(1, ws.max_column + 1)]
-            if any(x in str(row_vals) for x in ['PRICE', 'GARDEN', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
+            if any(x in cell_val for cell_val in row_vals for x in ['PRICE', 'GARDEN', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
                 header_row = r
                 for c in range(1, ws.max_column + 1):
                     val = str(ws.cell(row=r, column=c).value).upper()
@@ -215,7 +223,7 @@ def surgical_update(inv_path, master_path, output_path):
                         for c, name in col_indices.items():
                             if '%' in name: ws.cell(row=r_idx, column=c).value = new_pct
 
-                if row_name and row_name != 'None' and row_name != '':
+                if row_name and row_name.strip().lower() != 'none':
                     count = count_row_availability(df_inv, final_search_name, row_name, col_map)
                     if count is not None and count != "N/A":
                         for c, name in col_indices.items():
