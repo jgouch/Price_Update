@@ -93,6 +93,14 @@ def identify_columns(df):
             
     return mapping
 
+def garden_exists_in_inventory(df_inventory, garden_name, col_map):
+    col_garden = col_map['Garden']
+    if not col_garden:
+        return False
+    target_garden = normalize_garden_name(garden_name)
+    inv_gardens = df_inventory[col_garden].astype(str).apply(normalize_garden_name)
+    return inv_gardens.str.contains(target_garden, case=False, na=False, regex=False).any()
+
 # --- 5. CALCULATIONS ---
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_garden, col_section, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
@@ -113,7 +121,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_data = df_inventory[garden_mask]
     
     # 3. SUBSECTION FILTER
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False, regex=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
@@ -133,6 +141,8 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    if not col_garden or not col_status:
+        return "N/A"
 
     # Filter Garden
     inv_gardens = df_inventory[col_garden].astype(str).apply(normalize_garden_name)
