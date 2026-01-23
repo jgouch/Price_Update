@@ -116,12 +116,14 @@ def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     return mask.any()
 
 # --- 5. CALCULATIONS ---
+STATUS_AVAILABLE = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+
+
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_garden, col_section, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
-    if not col_garden or not col_status: return None
+    if not col_garden or not col_status:
+        return None
 
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
-    
     # Split "Grace - Sidewalk"
     parts = re.split(r'[-–]', garden_name_full)
     target_garden = normalize_garden_name(parts[0])
@@ -133,7 +135,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_data = df_inventory[garden_mask]
     
     # Filter by Section (if needed)
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False, regex=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
@@ -141,14 +143,15 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(STATUS_AVAILABLE), case=False, na=False)
     avail_count = len(garden_data[avail_mask])
     
     return (total - avail_count) / total
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    if not col_garden or not col_row or not col_status:
+        return "N/A"
 
     inv_gardens = df_inventory[col_garden].astype(str).apply(normalize_garden_name)
     target_garden = normalize_garden_name(garden_name)
@@ -167,8 +170,39 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(STATUS_AVAILABLE), case=False, na=False)
     return len(row_data[avail_mask])
+
+def build_inventory_cache(df_inventory, col_map):
+    col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_status:
+        return {}, {}
+
+    df_cache = df_inventory.copy()
+    df_cache['__garden_norm__'] = df_cache[col_garden].astype(str).apply(normalize_garden_name)
+    if col_row:
+        df_cache['__row_norm__'] = df_cache[col_row].astype(str).apply(clean_row_name)
+
+    pct_sold_cache = {}
+    for garden in df_cache['__garden_norm__'].dropna().unique():
+        garden_data = df_cache[df_cache['__garden_norm__'].str.contains(garden, case=False, na=False, regex=False)]
+        total = len(garden_data)
+        if total == 0:
+            continue
+        avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(STATUS_AVAILABLE), case=False, na=False)
+        avail_count = len(garden_data[avail_mask])
+        pct_sold_cache[garden] = (total - avail_count) / total
+
+    row_cache = {}
+    if col_row:
+        grouped = df_cache.groupby(['__garden_norm__', '__row_norm__'])
+        for (garden, row), subset in grouped:
+            if row == "":
+                continue
+            avail_mask = subset[col_status].astype(str).str.contains('|'.join(STATUS_AVAILABLE), case=False, na=False)
+            row_cache[(garden, row)] = len(subset[avail_mask])
+
+    return pct_sold_cache, row_cache
 
 # --- 6. SURGICAL UPDATE ---
 def surgical_update(inv_path, master_path, output_path):
@@ -182,6 +216,8 @@ def surgical_update(inv_path, master_path, output_path):
         
         # *** INSPECT GARDENS ***
         inspect_inventory_gardens(df_inv, col_map)
+
+        pct_sold_cache, row_cache = build_inventory_cache(df_inv, col_map)
         
     except Exception as e: print(f"❌ Inventory Error: {e}"); return
 
@@ -295,7 +331,12 @@ def surgical_update(inv_path, master_path, output_path):
             # --- DATA UPDATE ---
             if not is_header:
                 if garden_name:
-                    new_pct = calculate_percent_sold(df_inv, garden_name, col_map)
+                    garden_parts = re.split(r'[-–]', garden_name)
+                    garden_key = normalize_garden_name(garden_parts[0])
+                    if len(garden_parts) > 1:
+                        new_pct = calculate_percent_sold(df_inv, garden_name, col_map)
+                    else:
+                        new_pct = pct_sold_cache.get(garden_key)
                     if new_pct is not None:
                         for c, name in col_indices.items():
                             if '%' in name: 
@@ -303,7 +344,14 @@ def surgical_update(inv_path, master_path, output_path):
                                 ws.cell(row=r_idx, column=c).number_format = '0%'
 
                 if row_name and row_name != 'None' and row_name != '':
-                    count = count_row_availability(df_inv, final_search_name, row_name, col_map)
+                    garden_key = normalize_garden_name(final_search_name)
+                    row_key = clean_row_name(row_name)
+                    if row_key == 'ALL':
+                        count = count_row_availability(df_inv, final_search_name, row_name, col_map)
+                    else:
+                        count = row_cache.get((garden_key, row_key))
+                        if count is None:
+                            count = count_row_availability(df_inv, final_search_name, row_name, col_map)
                     if count is not None and count != "N/A":
                         for c, name in col_indices.items():
                             if any(x in name for x in ['AVAIL', 'QTY', 'STATUS']):
