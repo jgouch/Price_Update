@@ -52,6 +52,16 @@ def identify_columns(df):
             
     return mapping
 
+def validate_column_mapping(col_map):
+    missing = [key for key, value in col_map.items() if value is None]
+    if missing:
+        missing_str = ", ".join(missing)
+        raise ValueError(f"Missing required inventory columns: {missing_str}")
+
+def build_status_pattern(status_list):
+    escaped = [re.escape(status) for status in status_list]
+    return "|".join(escaped)
+
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
     # regex=False fixes the UserWarning about special characters
@@ -71,14 +81,15 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
     
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False, regex=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    status_pattern = build_status_pattern(status_avail)
+    avail_mask = garden_data[col_status].astype(str).str.contains(status_pattern, case=False, na=False, regex=True)
     return (total - len(garden_data[avail_mask])) / total
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
@@ -98,7 +109,8 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    status_pattern = build_status_pattern(status_avail)
+    avail_mask = row_data[col_status].astype(str).str.contains(status_pattern, case=False, na=False, regex=True)
     return len(row_data[avail_mask])
 
 # --- 5. SURGICAL UPDATE (Preserves Titles & Scarcity Check) ---
@@ -109,6 +121,7 @@ def surgical_update(inv_path, master_path, output_path):
     try:
         df_inv = pd.read_excel(inv_path, header=2)
         col_map = identify_columns(df_inv)
+        validate_column_mapping(col_map)
     except Exception as e: print(f"❌ Inventory Error: {e}"); return
 
     # B. Load Master Workbook (OpenPyXL)
@@ -134,7 +147,7 @@ def surgical_update(inv_path, master_path, output_path):
         # Scan first 20 rows to find where data starts
         for r in range(1, 21):
             row_vals = [str(ws.cell(row=r, column=c).value).upper() for c in range(1, ws.max_column + 1)]
-            if any(x in str(row_vals) for x in ['PRICE', 'GARDEN', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
+            if any(any(x in val for x in ['PRICE', 'GARDEN', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']) for val in row_vals):
                 header_row = r
                 for c in range(1, ws.max_column + 1):
                     val = str(ws.cell(row=r, column=c).value).upper()
@@ -218,7 +231,7 @@ def surgical_update(inv_path, master_path, output_path):
                     val_str = str(cell.value).strip()
                     if any(x in col_name for x in ['ROW', 'LEVEL', 'SECTION', 'STATION', 'PRODUCT']):
                         row_name = val_str
-                    if 'GARDEN' in col_name:
+                    if any(x in col_name for x in ['GARDEN', 'GROUP', 'LOCATION']):
                         garden_name = val_str
             
             # --- UPDATE NUMBERS FROM INVENTORY ---
@@ -233,7 +246,7 @@ def surgical_update(inv_path, master_path, output_path):
                     count = count_row_availability(df_inv, final_search_name, row_name, col_map)
                     if count is not None and count != "N/A":
                         for c, name in col_indices.items():
-                            if any(x in name for x in ['AVAIL', 'QTY', 'STATUS']):
+                            if any(x in name for x in ['AVAIL', 'QTY']):
                                 ws.cell(row=r_idx, column=c).value = "Sold Out" if count == 0 else count
                 
                 data_row_count += 1
