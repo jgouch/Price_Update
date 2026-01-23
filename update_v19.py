@@ -54,13 +54,17 @@ def identify_columns(df):
 
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
+    if not col_garden:
+        return False
     mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False, regex=False)
     return mask.any()
 
 # --- 4. CALCULATIONS ---
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_garden, col_section, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    if not col_garden or not col_status:
+        return None
+    status_avail_regex = r'\b(?:available|serviceable|for sale|vacant)\b'
     
     # 1. SPLIT BY DASH (if any)
     parts = re.split(r'[-–]', garden_name_full)
@@ -82,12 +86,14 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = garden_data[col_status].astype(str).str.contains(status_avail_regex, case=False, na=False, regex=True)
     return (total - len(garden_data[avail_mask])) / total
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
+    if not col_garden or not col_row or not col_status:
+        return "N/A"
+    status_avail_regex = r'\b(?:available|serviceable|for sale|vacant)\b'
 
     garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
@@ -97,12 +103,12 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     target = clean_row_name(row_name)
     if target == 'ALL': row_data = garden_data
     else:
-        row_mask = garden_data[col_row].astype(str).apply(clean_row_name) == target
+        row_mask = garden_data['_clean_row'] == target
         row_data = garden_data[row_mask]
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = row_data[col_status].astype(str).str.contains(status_avail_regex, case=False, na=False, regex=True)
     return len(row_data[avail_mask])
 
 # --- 5. SURGICAL UPDATE ---
@@ -113,6 +119,11 @@ def surgical_update(inv_path, master_path, output_path):
         df_inv = pd.read_excel(inv_path, header=2)
         col_map = identify_columns(df_inv)
     except Exception as e: print(f"❌ Inventory Error: {e}"); return
+    missing_cols = [key for key, value in col_map.items() if not value]
+    if missing_cols:
+        print(f"❌ Inventory Error: Missing required columns: {', '.join(missing_cols)}")
+        return
+    df_inv['_clean_row'] = df_inv[col_map['Row']].astype(str).apply(clean_row_name)
 
     wb = load_workbook(master_path)
     
@@ -221,8 +232,9 @@ def surgical_update(inv_path, master_path, output_path):
             # --- UPDATE ---
             if not is_header:
                 # 1. UPDATE % SOLD (Now handles parentheses!)
-                if garden_name:
-                    new_pct = calculate_percent_sold(df_inv, garden_name, col_map)
+                pct_garden_name = garden_name or final_search_name
+                if pct_garden_name:
+                    new_pct = calculate_percent_sold(df_inv, pct_garden_name, col_map)
                     if new_pct is not None:
                         for c, name in col_indices.items():
                             if '%' in name: ws.cell(row=r_idx, column=c).value = new_pct
