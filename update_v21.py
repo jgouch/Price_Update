@@ -93,6 +93,18 @@ def identify_columns(df):
             
     return mapping
 
+def is_numberish(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return True
+    if value is None:
+        return False
+    if isinstance(value, str):
+        cleaned = value.replace('$', '').replace(',', '').strip()
+        if cleaned == '':
+            return False
+        return cleaned.replace('.', '', 1).isdigit()
+    return False
+
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     col_garden = col_map['Garden']
     if not col_garden: return False
@@ -102,6 +114,8 @@ def garden_exists_in_inventory(df_inventory, garden_name, col_map):
 # --- 5. CALCULATIONS ---
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     col_garden, col_section, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
     
     # 1. SPLIT & CLEAN
@@ -113,7 +127,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False, regex=False)
     garden_data = df_inventory[garden_mask]
     
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False, regex=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
@@ -130,6 +144,8 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_row or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
     garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False, regex=False)
@@ -159,6 +175,12 @@ def surgical_update(inv_path, master_path, output_path):
         col_map = identify_columns(df_inv)
         
         print(f"   > Mapped Columns: {col_map}")
+        can_calc_percent = bool(col_map['Garden'] and col_map['Status'])
+        can_count_rows = bool(col_map['Garden'] and col_map['Row'] and col_map['Status'])
+        if not can_calc_percent:
+            print("   > ⚠️  Percent sold updates disabled: missing Garden or Status column.")
+        if not can_count_rows:
+            print("   > ⚠️  Row availability updates disabled: missing Garden, Row, or Status column.")
         
         # Diagnostic Scan for "Grace"
         if col_map['Garden']:
@@ -192,7 +214,10 @@ def surgical_update(inv_path, master_path, output_path):
         # 1. FIND MASTER SHEET HEADER
         for r in range(1, 21):
             row_vals = [str(ws.cell(row=r, column=c).value).upper() for c in range(1, ws.max_column + 1)]
-            if any(x in str(row_vals) for x in ['PRICE', 'GARDEN', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
+            if any(
+                any(keyword in value for keyword in ['PRICE', 'GARDEN', 'LEVEL', 'ROW', 'SECTION', 'AVAIL'])
+                for value in row_vals
+            ):
                 header_row = r
                 for c in range(1, ws.max_column + 1):
                     val = str(ws.cell(row=r, column=c).value).upper()
@@ -248,14 +273,15 @@ def surgical_update(inv_path, master_path, output_path):
                     if any(x in col_name for x in ['PRICE', 'TOTAL', 'RIGHT', 'COST', 'PLAQUE', 'ETCHING', 'FRONT', 'CRYPT', 'NICHE', 'MEMORIAL', 'BURIAL', 'OPTION']):
                         val_str = str(cell.value).upper()
                         if val_str not in ['SINGLE', 'COMPANION', 'TANDEM', 'SIDE-BY-SIDE', 'NONE', 'None', '']:
-                            cell.number_format = '"$"#,##0'
-                            cell.alignment = center_align
-                            try:
-                                if cell.value is not None:
-                                    clean_val = str(cell.value).replace('$', '').replace(',', '').strip()
-                                    if clean_val.replace('.', '', 1).isdigit():
-                                        cell.value = float(clean_val)
-                            except: pass
+                            if is_numberish(cell.value):
+                                cell.number_format = '"$"#,##0'
+                                cell.alignment = center_align
+                                try:
+                                    if cell.value is not None:
+                                        clean_val = str(cell.value).replace('$', '').replace(',', '').strip()
+                                        if clean_val.replace('.', '', 1).isdigit():
+                                            cell.value = float(clean_val)
+                                except: pass
 
                     elif any(x in col_name for x in ['%', 'SOLD']) and 'QTY' not in col_name:
                         cell.number_format = '0%'
@@ -270,7 +296,7 @@ def surgical_update(inv_path, master_path, output_path):
                             cell.number_format = 'General'
                         else:
                             try:
-                                if str(cell.value).replace('.', '', 1).isdigit():
+                                if is_numberish(cell.value):
                                     cell.value = int(float(str(cell.value)))
                                     if 0 < cell.value < 4:
                                         cell.font = Font(name=FONT_NAME, size=10, color="E26B0A", bold=True)
@@ -286,14 +312,14 @@ def surgical_update(inv_path, master_path, output_path):
             # --- DATA INJECTION ---
             if not is_header:
                 # Update % Sold
-                if garden_name:
+                if garden_name and can_calc_percent:
                     new_pct = calculate_percent_sold(df_inv, garden_name, col_map)
                     if new_pct is not None:
                         for c, name in col_indices.items():
                             if '%' in name: ws.cell(row=r_idx, column=c).value = new_pct
 
                 # Update Counts
-                if row_name and row_name != 'None' and row_name != '':
+                if row_name and row_name != 'None' and row_name != '' and can_count_rows:
                     count = count_row_availability(df_inv, final_search_name, row_name, col_map)
                     if count is not None and count != "N/A":
                         for c, name in col_indices.items():
