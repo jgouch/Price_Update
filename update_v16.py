@@ -52,13 +52,17 @@ def identify_columns(df):
     return mapping
 
 def garden_exists_in_inventory(df_inventory, garden_name, col_map):
-    col_garden = col_map['Garden']
+    col_garden = col_map.get('Garden')
+    if not col_garden:
+        return False
     mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
     return mask.any()
 
 # --- 4. CALCULATIONS ---
 def calculate_percent_sold(df_inventory, garden_name_full, col_map):
-    col_garden, col_section, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    col_garden, col_section, col_status = col_map.get('Garden'), col_map.get('Row'), col_map.get('Status')
+    if not col_garden or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
     
     parts = re.split(r'[-–]', garden_name_full)
@@ -68,7 +72,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_mask = df_inventory[col_garden].astype(str).str.contains(main_garden, case=False, na=False)
     garden_data = df_inventory[garden_mask]
     
-    if sub_section and not garden_data.empty:
+    if col_section and sub_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
@@ -79,7 +83,9 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     return (total - len(garden_data[avail_mask])) / total
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
-    col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    col_garden, col_row, col_status = col_map.get('Garden'), col_map.get('Row'), col_map.get('Status')
+    if not col_garden or not col_status or not col_row:
+        return "N/A"
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
     garden_mask = df_inventory[col_garden].astype(str).str.contains(garden_name, case=False, na=False)
@@ -106,6 +112,10 @@ def surgical_update(inv_path, master_path, output_path):
     try:
         df_inv = pd.read_excel(inv_path, header=2)
         col_map = identify_columns(df_inv)
+        missing = [key for key in ['Garden', 'Status'] if not col_map.get(key)]
+        if missing:
+            print(f"❌ Inventory Error: Missing required column(s): {', '.join(missing)}")
+            return
     except Exception as e: print(f"❌ Inventory Error: {e}"); return
 
     # B. Load Master Workbook (OpenPyXL)
