@@ -72,12 +72,13 @@ def super_clean_name(name):
 # --- 4. MAPPING (THE FIX) ---
 def identify_columns(df):
     cols = [str(c) for c in df.columns]
+    cols_upper = [c.upper() for c in cols]
     mapping = {'Garden': None, 'Row': None, 'Status': None}
     
     # 1. GARDEN -> "SECTION"
     # In your file, "Location" is the cemetery, "Section" is the Garden.
-    if 'Section' in cols:
-        mapping['Garden'] = 'Section'
+    if 'SECTION' in cols_upper:
+        mapping['Garden'] = cols[cols_upper.index('SECTION')]
     else:
         # Fallback
         for c in cols:
@@ -86,8 +87,8 @@ def identify_columns(df):
 
     # 2. ROW -> "SPACE"
     # In your file, "Space" contains the lot/row info.
-    if 'Space' in cols:
-        mapping['Row'] = 'Space'
+    if 'SPACE' in cols_upper:
+        mapping['Row'] = cols[cols_upper.index('SPACE')]
     else:
         # Fallback
         candidates = [c for c in cols if any(x in c.upper() for x in ['ROW', 'LOT', 'TIER'])]
@@ -127,7 +128,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     
     # 3. SUBSECTION FILTER
     # If sub-section exists, search for it in the Garden Name OR the Space Name
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         # Try finding "Matthew" in "Grace - Matthew Section" (Garden Col)
         sub_mask_1 = garden_data[col_garden].astype(str).str.contains(sub_section, case=False, na=False)
         # Try finding "Sidewalk" in "Space 1..." (Space Col)
@@ -150,6 +151,8 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_row or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
     target_garden = super_clean_name(garden_name)
@@ -282,7 +285,7 @@ def surgical_update(inv_path, master_path, output_path):
                         # Percentages
                         elif any(x in col_name for x in ['%', 'SOLD']) and 'QTY' not in col_name:
                             try:
-                                cell.value = float(val_str)
+                                cell.value = float(val_str.replace('%', ''))
                                 cell.number_format = '0%'
                                 cell.data_type = 'n'
                             except: pass
