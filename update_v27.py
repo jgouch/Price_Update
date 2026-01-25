@@ -71,15 +71,18 @@ def super_clean_name(name):
 # --- 4. MAPPING ---
 def identify_columns(df):
     cols = [str(c) for c in df.columns]
+    cols_upper = [c.upper() for c in cols]
     mapping = {'Garden': None, 'Row': None, 'Status': None}
     
-    if 'Section' in cols: mapping['Garden'] = 'Section'
+    if 'SECTION' in cols_upper:
+        mapping['Garden'] = cols[cols_upper.index('SECTION')]
     else:
         for c in cols:
             if 'GARDEN' in c.upper() or 'LOCATION' in c.upper():
                 mapping['Garden'] = c; break
 
-    if 'Space' in cols: mapping['Row'] = 'Space'
+    if 'SPACE' in cols_upper:
+        mapping['Row'] = cols[cols_upper.index('SPACE')]
     else:
         candidates = [c for c in cols if any(x in c.upper() for x in ['ROW', 'LOT', 'TIER'])]
         if candidates: mapping['Row'] = candidates[0]
@@ -139,6 +142,8 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 
     # --- SPECIAL LOGIC FOR GRACE ---
     if target_garden == "GRACE":
+        if not col_section:
+            return None
         # Separate into Sidewalk vs. Standard based on Plot Number
         is_sidewalk = garden_data[col_section].apply(is_grace_sidewalk)
         
@@ -155,7 +160,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
             return None 
             
     # --- STANDARD LOGIC FOR OTHERS ---
-    elif sub_section:
+    elif sub_section and col_section:
         sub_mask_1 = garden_data[col_garden].astype(str).str.contains(sub_section, case=False, na=False)
         sub_mask_2 = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
         final_sub_mask = sub_mask_1 | sub_mask_2
@@ -172,6 +177,8 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_row or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
     target_garden = super_clean_name(garden_name)
