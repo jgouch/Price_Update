@@ -74,12 +74,12 @@ def super_clean_name(name):
 def identify_columns(df):
     cols_map = {str(c).strip().upper(): c for c in df.columns}
     mapping = {'Garden': None, 'Row': None, 'Status': None}
-    
-    if 'SECTION' in cols_map: mapping['Garden'] = cols_map['SECTION']
-    else:
-        for c_up, c_orig in cols_map.items():
-            if 'GARDEN' in c_up or 'LOCATION' in c_up:
-                mapping['Garden'] = c_orig; break
+
+    for c_up, c_orig in cols_map.items():
+        if 'GARDEN' in c_up or 'LOCATION' in c_up:
+            mapping['Garden'] = c_orig; break
+    if not mapping['Garden'] and 'SECTION' in cols_map:
+        mapping['Garden'] = cols_map['SECTION']
 
     if 'SPACE' in cols_map: mapping['Row'] = cols_map['SPACE']
     elif 'LOT' in cols_map: mapping['Row'] = cols_map['LOT']
@@ -222,10 +222,9 @@ def surgical_update(inv_path, master_path, output_path):
         # 1. FIND HEADER (Fixing False Positive on 'Price')
         for r in range(1, 21):
             row_vals = [str(ws.cell(row=r, column=c).value).upper() for c in range(1, ws.max_column + 1)]
-            
-            # STRICTER CHECK: Must contain GARDEN to be the real header
-            # This avoids matching "Master Price Book" on Row 1
-            if 'GARDEN' in str(row_vals) and any(x in str(row_vals) for x in ['PRICE', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
+
+            # Prefer headers that include GARDEN, but allow fallback for sheets without it.
+            if (('GARDEN' in str(row_vals)) or any(x in str(row_vals) for x in ['LOCATION'])) and any(x in str(row_vals) for x in ['PRICE', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
                 header_row = r
                 for c in range(1, ws.max_column + 1):
                     val = str(ws.cell(row=r, column=c).value).upper()
@@ -233,7 +232,18 @@ def surgical_update(inv_path, master_path, output_path):
                         col_indices[c] = val
                         if val in ['ROW', 'LEVEL', 'SECTION', 'CRYPT', 'NICHE', 'SPACE'] and not row_col_idx:
                             row_col_idx = c
-                        if 'GARDEN' in val and not garden_col_idx:
+                        if ('GARDEN' in val or 'LOCATION' in val or val == 'SECTION') and not garden_col_idx:
+                            garden_col_idx = c
+                break
+            if not col_indices and any(x in str(row_vals) for x in ['PRICE', 'LEVEL', 'ROW', 'SECTION', 'AVAIL']):
+                header_row = r
+                for c in range(1, ws.max_column + 1):
+                    val = str(ws.cell(row=r, column=c).value).upper()
+                    if val != 'NONE':
+                        col_indices[c] = val
+                        if val in ['ROW', 'LEVEL', 'SECTION', 'CRYPT', 'NICHE', 'SPACE'] and not row_col_idx:
+                            row_col_idx = c
+                        if ('GARDEN' in val or 'LOCATION' in val or val == 'SECTION') and not garden_col_idx:
                             garden_col_idx = c
                 break
         
@@ -358,7 +368,7 @@ def surgical_update(inv_path, master_path, output_path):
                     count = count_row_availability(df_inv, final_search_name, row_name, col_map)
                     if count is not None and count != "N/A":
                         for c, name in col_indices.items():
-                            if any(x in name for x in ['AVAIL', 'QTY', 'STATUS']):
+                            if any(x in name for x in ['AVAIL', 'QTY']) or ('STATUS' in name and any(x in name for x in ['AVAIL', 'QTY'])):
                                 cell = ws.cell(row=r_idx, column=c)
                                 if isinstance(cell, MergedCell):
                                     for merged_range in ws.merged_cells.ranges:
