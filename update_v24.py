@@ -105,6 +105,8 @@ def garden_exists_in_inventory(df_inventory, garden_name, col_map):
     
     # Try Super Clean Match
     target = super_clean_name(garden_name)
+    if not target:
+        return False
     inv_clean = df_inventory[col_garden].astype(str).apply(super_clean_name)
     
     return inv_clean.str.contains(target, case=False, na=False).any()
@@ -121,6 +123,8 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     
     # Use Super Clean on the Main Garden Name
     target_garden = super_clean_name(parts[0])
+    if not target_garden:
+        return None
     
     sub_section = parts[1].strip() if len(parts) > 1 else None
 
@@ -135,7 +139,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     garden_data = df_inventory[garden_mask]
     
     # 3. SUBSECTION FILTER
-    if sub_section and not garden_data.empty:
+    if sub_section and col_section and not garden_data.empty:
         section_mask = garden_data[col_section].astype(str).str.contains(sub_section, case=False, na=False)
         if section_mask.any(): garden_data = garden_data[section_mask]
     
@@ -152,9 +156,13 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
     col_garden, col_row, col_status = col_map['Garden'], col_map['Row'], col_map['Status']
+    if not col_garden or not col_row or not col_status:
+        return None
     status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
     target_garden = super_clean_name(garden_name)
+    if not target_garden:
+        return None
     inv_clean = df_inventory[col_garden].astype(str).apply(super_clean_name)
     
     garden_mask = inv_clean.str.contains(target_garden, case=False, na=False)
