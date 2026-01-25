@@ -10,6 +10,7 @@ from openpyxl.cell.cell import MergedCell
 
 # --- 1. SETUP ---
 warnings.simplefilter(action='ignore', category=FutureWarning)
+STATUS_AVAILABLE = ['Available', 'Serviceable', 'For Sale', 'Vacant']
 
 # --- 2. HEADER SCANNER ---
 def find_inventory_header(file_path):
@@ -144,7 +145,6 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     # Safeguard against missing columns
     if not col_garden or not col_status: return None
 
-    status_avail = ['Available', 'Serviceable', 'For Sale', 'Vacant']
     parts = re.split(r'[-–]', garden_name_full)
     
     # Clean target name
@@ -186,7 +186,7 @@ def calculate_percent_sold(df_inventory, garden_name_full, col_map):
     total = len(garden_data)
     if total == 0: return None
         
-    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = garden_data[col_status].astype(str).str.contains('|'.join(STATUS_AVAILABLE), case=False, na=False)
     return (total - len(garden_data[avail_mask])) / total
 
 def count_row_availability(df_inventory, garden_name, row_name, col_map):
@@ -214,7 +214,7 @@ def count_row_availability(df_inventory, garden_name, row_name, col_map):
     
     if len(row_data) == 0: return None
     
-    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(status_avail), case=False, na=False)
+    avail_mask = row_data[col_status].astype(str).str.contains('|'.join(STATUS_AVAILABLE), case=False, na=False)
     return len(row_data[avail_mask])
 
 # --- 6. SURGICAL UPDATE ---
