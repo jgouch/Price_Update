@@ -26,8 +26,7 @@ from __future__ import annotations
 import re
 import math
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, List
 
 import pandas as pd
 import openpyxl
@@ -153,6 +152,11 @@ def load_facts() -> pd.DataFrame:
     headers = [re.sub(r"\s+", " ", str(h)).strip() for h in raw.iloc[1].fillna("")]
     df = raw.iloc[2:].copy()
     df.columns = headers
+    required_columns = {"Location", "Section", "Status", "Space", "Sales Item"}
+    missing = required_columns - set(df.columns)
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise ValueError(f"FaCTS export is missing required columns: {missing_list}")
     df = df[df["Location"].notna()].copy()
 
     for c in ["Section", "Status", "Type", "Sales Item", "Space", "Right Types"]:
@@ -205,7 +209,7 @@ def mv_buckets(facts: pd.DataFrame) -> Dict[Tuple[str,int,str,str], Dict]:
         status = r.get("Status", "")
         sales_item = r.get("Sales Item", "")
         product = "Tandem" if "tandem" in sales_item.lower() else "Single"
-        rows.append((band, elev, ROW_THEME_MV[row_letter], crypt_num, product, status))
+        rows.append((band, elev, ROW_THEME_MV.get(row_letter, row_letter), crypt_num, product, status))
 
     if not rows:
         return {}
@@ -270,7 +274,6 @@ def building_buckets_simple_by_row(
         m = space_regex.search(s)
         if not m:
             continue
-        level_num = int(m.group(2))
         row_letter = m.group(3).upper()
         status = r.get("Status","")
         sales_item = r.get("Sales Item","")
@@ -500,13 +503,7 @@ def publish():
     out_wb = openpyxl.Workbook()
     out_wb.remove(out_wb.active)
 
-    def build_mausoleum_sheet(product_family: str, title: str, headers: List[str], widths: Dict[int,float],
-                             key_mode: str):
-        """
-        key_mode:
-          - 'mv' uses keys (band,elev,theme,option)
-          - 'row_only' uses keys (theme,option)
-        """
+    def build_mausoleum_sheet(product_family: str, title: str, headers: List[str], widths: Dict[int,float]):
         ws = out_wb.create_sheet(product_family[:31])  # excel name limit safeguard
         title_bar(ws, title, last_col=len(headers))
         header_row(ws, headers, row=2)
@@ -592,7 +589,8 @@ def publish():
                             b = bucket_map.get((theme,"Single"), {"avail":0,"total":0,"sold_pct":0.0})
                             # availability of companion units should be computed later; for now, if singles sold out -> companion sold out.
                             sold_pct = float(b["sold_pct"])
-                            availability = "Sold Out"
+                            avail = int(b["avail"])
+                            availability = avail if avail>0 else "Sold Out"
                         else:
                             b = bucket_map.get((theme,opt), {"avail":0,"total":0,"sold_pct":0.0})
                             sold_pct = float(b["sold_pct"])
@@ -615,32 +613,27 @@ def publish():
     build_mausoleum_sheet("Mountain View - Upper Level",
                           "MOUNTAIN VIEW MAUSOLEUM — UPPER LEVEL",
                           ["Row","Option","Crypt","Crypt Front","Total","Availability"],
-                          {1:22,2:12,3:14,4:14,5:14,6:12},
-                          key_mode="mv")
+                          {1:22,2:12,3:14,4:14,5:14,6:12})
 
     build_mausoleum_sheet("Mountain View - Lower Level",
                           "MOUNTAIN VIEW MAUSOLEUM — LOWER LEVEL",
                           ["Row","Option","Crypt","Crypt Front","Total","Availability"],
-                          {1:22,2:12,3:14,4:14,5:14,6:12},
-                          key_mode="mv")
+                          {1:22,2:12,3:14,4:14,5:14,6:12})
 
     build_mausoleum_sheet("Building 7 Mausoleum",
                           "BUILDING 7 MAUSOLEUM",
                           ["Row","Option","Crypt","Crypt Front","Total","Availability"],
-                          {1:22,2:12,3:14,4:14,5:14,6:12},
-                          key_mode="row_only")
+                          {1:22,2:12,3:14,4:14,5:14,6:12})
 
     build_mausoleum_sheet("Building 8 Mausoleum",
                           "BUILDING 8 MAUSOLEUM",
                           ["Section","Option","Crypt","Crypt Front","Total","Availability"],
-                          {1:28,2:12,3:14,4:14,5:14,6:12},
-                          key_mode="row_only")
+                          {1:28,2:12,3:14,4:14,5:14,6:12})
 
     build_mausoleum_sheet("Bell Tower Mausoleum",
                           "BELL TOWER MAUSOLEUM",
                           ["Row","Option","Crypt","Crypt Front","Total","Availability"],
-                          {1:22,2:12,3:14,4:14,5:14,6:12},
-                          key_mode="row_only")
+                          {1:22,2:12,3:14,4:14,5:14,6:12})
 
     out_wb.save(OUTPUT_XLSX)
     print(f"Wrote: {OUTPUT_XLSX}")
